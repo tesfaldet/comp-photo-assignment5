@@ -76,6 +76,61 @@ def removeSeam(image, s):
 
 def expandSeams(image, seams):
     # expand by taking average of left and right neighbour
+
+    pass
+
+
+def animateSeamRemoval(image, remove_rows, remove_cols):
+    # interactive imshow
+    image_old = image.copy()
+    obj = plt.imshow(image)
+    plt.ion()
+
+    # animate removal of seams
+    for i in range(remove_cols):
+        # compute cumulative optimal energy and optimal directions
+        M, N = computeCumulativeOptCosts(image)
+
+        # retrieve optimal seam(s)
+        s = optimalSeams(M, N)
+
+        # highlight optimal seam
+        image[s[:, 0], s[:, 1], :] = [255.0, 0.0, 0.0]
+
+        # display seam
+        obj.set_data(image)
+        plt.pause(0.05)
+
+        # remove optimal seam
+        image = removeSeam(image, s)
+
+        # replace displayed image with seam removed image
+        obj.set_data(image)
+
+    for i in range(remove_rows):
+        M, N = computeCumulativeOptCosts(np.transpose(image, (1, 0, 2)))
+
+        s = optimalSeams(M, N)
+
+        image[s[:, 1], s[:, 0], :] = [255.0, 0.0, 0.0]
+
+        obj.set_data(image)
+        plt.pause(0.05)
+
+        image = removeSeam(np.transpose(image, (1, 0, 2)), s)
+        image = np.transpose(image, (1, 0, 2))
+
+        obj.set_data(image)
+
+    plt.ioff()
+    plt.subplot(121)
+    plt.imshow(image_old)
+    plt.subplot(122)
+    plt.imshow(image)
+    plt.show()
+
+
+def animateSeamExpansion(image, expand_rows, expand_cols):
     pass
 
 
@@ -85,35 +140,4 @@ filelist = glob.glob('T1/*.bmp')
 # stack them into SxHxW
 image1 = misc.imread(filelist[0])
 
-# interactive imshow
-image_old = image1.copy()
-obj = plt.imshow(image1)
-plt.ion()
-
-# animate removal of seams
-for i in range(1):
-    # compute cumulative optimal energy and optimal directions
-    M, N = computeCumulativeOptCosts(image1)
-
-    # retrieve optimal seam
-    s = optimalSeams(M, N)
-
-    # highlight optimal seam
-    image1[s[:, 0], s[:, 1], :] = [255.0, 0.0, 0.0]
-
-    # display seam
-    obj.set_data(image1)
-    plt.pause(5)
-
-    # remove optimal seam
-    image1 = removeSeam(image1, s)
-
-    # replace displayed image with seam removed image
-    obj.set_data(image1)
-
-plt.ioff()
-plt.subplot(121)
-plt.imshow(image_old)
-plt.subplot(122)
-plt.imshow(image1)
-plt.show()
+animateSeamRemoval(image1, 100, 100)
