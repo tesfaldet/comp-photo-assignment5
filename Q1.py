@@ -13,12 +13,16 @@ def rgb2gray(rgb):
     return np.dot(rgb[..., :3], [0.299, 0.587, 0.114])  # MATLAB style
 
 
-def computeCumulativeOptCosts(image):
+def computeCumulativeOptCosts(image, mask=None):
     # compute e1
     gray = rgb2gray(image)
     fx = correlate1d(gray, weights=[-1, 0, 1], axis=0)
     fy = correlate1d(gray, weights=[-1, 0, 1], axis=1)
     e1 = np.abs(fx) + np.abs(fy)
+
+    # mask represents places to avoid
+    if mask is not None:
+        e1[mask[:, 0], mask[:, 1]] = float('inf')
 
     # initialize M and N
     M = np.pad(e1, ((0,), (1,)), 'constant', constant_values=float('inf'))
@@ -35,34 +39,23 @@ def computeCumulativeOptCosts(image):
 
 
 # assuming vertical seam
-def optimalSeams(M, N, k=1):
-    # find top k minimal costs at last row and start from there
+def optimalSeam(M, N):
+    # find minimal cost at last row and start from there
     r = M.shape[0] - 1
-    c = np.argsort(M[r])[:k]
+    c = np.argmin(M[r])
 
-    # storing k top seams
-    seams = []
+    # initialize seam
+    s = [(r, c)]
 
-    for i in range(c.shape[0]):
-        # initialize seam
-        s = [(r, c[i])]
+    # follow optimal path up to first row
+    direction = N[r, c]
+    while not math.isnan(direction):
+        r -= 1
+        c += int(direction)
+        s.append((r, c))
+        direction = N[r, c]
 
-        # follow optimal path up to first row
-        direction = N[r, c[i]]
-        while not math.isnan(direction):
-            r -= 1
-            c[i] += int(direction)
-            s.append((r, c[i]))
-            direction = N[r, c[i]]
-
-        seams.append(s)
-
-        r = M.shape[0] - 1
-
-    if k == 1:
-        return np.array(seams)[0]
-    else:
-        return np.array(seams)
+    return np.array(s)
 
 
 def removeSeam(image, s):
@@ -74,53 +67,53 @@ def removeSeam(image, s):
     return image
 
 
-def expandSeams(image, seams):
-    # expand by taking average of left and right neighbour
-
-    pass
-
-
 def animateSeamRemoval(image, remove_rows, remove_cols):
     # interactive imshow
     image_old = image.copy()
     obj = plt.imshow(image)
     plt.ion()
 
-    # animate removal of seams
-    for i in range(remove_cols):
-        # compute cumulative optimal energy and optimal directions
-        M, N = computeCumulativeOptCosts(image)
+    def removeSeams(image, obj, remove, transpose=False):
+        if transpose:
+            image = np.transpose(image, (1, 0, 2))
 
-        # retrieve optimal seam(s)
-        s = optimalSeams(M, N)
+        # animate removal of seams
+        for i in range(remove):
+            # compute cumulative optimal energy and optimal directions
+            M, N = computeCumulativeOptCosts(image)
 
-        # highlight optimal seam
-        image[s[:, 0], s[:, 1], :] = [255.0, 0.0, 0.0]
+            # retrieve optimal seam(s)
+            s = optimalSeam(M, N)
 
-        # display seam
-        obj.set_data(image)
-        plt.pause(0.05)
+            # highlight optimal seam
+            image[s[:, 0], s[:, 1], :] = [255.0, 0.0, 0.0]
 
-        # remove optimal seam
-        image = removeSeam(image, s)
+            # display seam
+            if transpose:
+                obj.set_data(np.transpose(image, (1, 0, 2)))
+            else:
+                obj.set_data(image)
+            plt.pause(0.05)
 
-        # replace displayed image with seam removed image
-        obj.set_data(image)
+            # remove optimal seam
+            image = removeSeam(image, s)
 
-    for i in range(remove_rows):
-        M, N = computeCumulativeOptCosts(np.transpose(image, (1, 0, 2)))
+            # replace displayed image with seam removed image
+            if transpose:
+                obj.set_data(np.transpose(image, (1, 0, 2)))
+            else:
+                obj.set_data(image)
 
-        s = optimalSeams(M, N)
+        if transpose:
+            return np.transpose(image, (1, 0, 2))
+        else:
+            return image
 
-        image[s[:, 1], s[:, 0], :] = [255.0, 0.0, 0.0]
+    # remove columns
+    image = removeSeams(image, obj, remove_cols)
 
-        obj.set_data(image)
-        plt.pause(0.05)
-
-        image = removeSeam(np.transpose(image, (1, 0, 2)), s)
-        image = np.transpose(image, (1, 0, 2))
-
-        obj.set_data(image)
+    # remove rows
+    image = removeSeams(image, obj, remove_rows, transpose=True)
 
     plt.ioff()
     plt.subplot(121)
@@ -129,15 +122,117 @@ def animateSeamRemoval(image, remove_rows, remove_cols):
     plt.imshow(image)
     plt.show()
 
+    return image
+
 
 def animateSeamExpansion(image, expand_rows, expand_cols):
-    pass
+    image = image.astype('float32')
+
+    # interactive imshow
+    image_old = image.copy()
+    obj = plt.imshow(image.astype('uint8'))
+    plt.ion()
+
+    def expandSeams(image, obj, expand, transpose=False):
+        if transpose:
+            image = np.transpose(image, (1, 0, 2))
+
+        seams = []
+        mask = None
+
+        # get vertical seams
+        for j in range(expand):
+            # compute cumulative optimal energy and optimal directions
+            M, N = computeCumulativeOptCosts(image, mask)
+
+            # retrieve optimal seam(s)
+            s = optimalSeam(M, N)
+            seams.append(s)
+
+            mask = np.concatenate(seams)
+
+        # expand by replacing seam with two seams:
+        # 1. seam which is the average of the optimal seam and its left
+        # neighbour,
+        # 2. seam which is the average of the optimal seam and its right
+        # neighbour
+        for k in range(len(seams)):
+            # take seam
+            s = seams[k]
+
+            image_seam = image[s[:, 0], s[:, 1], :]
+
+            # pad left and right sides with zeros to deal with out of bounds
+            image = np.pad(image, ((0, 0), (1, 1), (0, 0)), 'constant')
+            avg_left = (image_seam + image[s[:, 0], s[:, 1], :]) / 2.0
+            avg_right = (image_seam + image[s[:, 0], s[:, 1]+2, :]) / 2.0
+
+            # truncate left and right sides
+            image = image[:, 1:-1, :]
+
+            # highlight optimal seam
+            image[s[:, 0], s[:, 1], :] = [255.0, 0.0, 0.0]
+
+            # display seam
+            if transpose:
+                obj.set_data(np.transpose(image.astype('uint8'), (1, 0, 2)))
+            else:
+                obj.set_data(image.astype('uint8'))
+            plt.pause(0.05)
+
+            # place back old seam
+            image[s[:, 0], s[:, 1], :] = image_seam
+
+            # shift all columns to the right of this seam by one
+            image = np.pad(image, ((0, 0), (0, 1), (0, 0)), 'constant')
+            for i in range(s.shape[0]):
+                image[s[i, 0], s[i, 1]+1:, :] = image[s[i, 0], s[i, 1]:-1, :]
+
+            # shift all other seams to the right of this seam by one
+            for i in range(k+1, len(seams)):
+                # check if other seam's first pixel is to the right of the
+                # current seam's first pixel
+                if seams[i][0, 1] > s[0, 1]:
+                    seams[i][:, 1] += 1  # shift to the right
+
+            # insert new average seams
+            image[s[:, 0], s[:, 1], :] = avg_left
+            image[s[:, 0], s[:, 1]+1, :] = avg_right
+
+            # replace displayed image with seam expanded image
+            if transpose:
+                obj.set_data(np.transpose(image.astype('uint8'), (1, 0, 2)))
+            else:
+                obj.set_data(image.astype('uint8'))
+
+        if transpose:
+            return np.transpose(image, (1, 0, 2))
+        else:
+            return image
+
+    # expand columns
+    image = expandSeams(image, obj, expand_cols)
+
+    # expand rows
+    image = expandSeams(image, obj, expand_rows, transpose=True)
+
+    plt.ioff()
+    plt.subplot(121)
+    plt.imshow(image_old.astype('uint8'))
+    plt.subplot(122)
+    plt.imshow(image.astype('uint8'))
+    plt.show()
+
+    return image.astype('uint8')
 
 
 # retrieve images
 filelist = glob.glob('T1/*.bmp')
 
-# stack them into SxHxW
 image1 = misc.imread(filelist[0])
+image1 = animateSeamRemoval(image1, remove_rows=10, remove_cols=10)
+image1 = animateSeamExpansion(image1, expand_rows=10, expand_cols=10)
 
-animateSeamRemoval(image1, 100, 100)
+image2 = misc.imread(filelist[1])
+image2 = animateSeamRemoval(image2, remove_rows=10, remove_cols=10)
+image2 = animateSeamExpansion(image2, expand_rows=10, expand_cols=10)
